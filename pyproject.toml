@@ -1,14 +1,26 @@
 [project]
 name = "mlx-boosting"
-version = "0.1.0"
+version = "1.0.0"
 description = "GPU-accelerated boosting algorithms using Apple MLX for Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Your Name", email = "your@email.com" }]
-keywords = ["machine-learning", "mlx", "boosting", "gradient-boosting", "apple-silicon"]
+authors = [{ name = "Quan Nguyen" }]
+keywords = [
+    "machine-learning",
+    "mlx",
+    "boosting",
+    "gradient-boosting",
+    "xgboost",
+    "gbdt",
+    "apple-silicon",
+    "m1",
+    "m2",
+    "m3",
+    "gpu",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -17,6 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -36,9 +49,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/mlx-boosting"
-Repository = "https://github.com/yourusername/mlx-boosting"
-Issues = "https://github.com/yourusername/mlx-boosting/issues"
+Homepage = "https://github.com/qnguyen3/mlx-boosting"
+Repository = "https://github.com/qnguyen3/mlx-boosting"
+Documentation = "https://github.com/qnguyen3/mlx-boosting#readme"
+Issues = "https://github.com/qnguyen3/mlx-boosting/issues"
+Changelog = "https://github.com/qnguyen3/mlx-boosting/releases"
 
 [build-system]
 requires = ["hatchling"]
