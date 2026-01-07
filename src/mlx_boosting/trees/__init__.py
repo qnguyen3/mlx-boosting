@@ -1,3 +1,11 @@
-"""Tree implementations for MLX Boosting."""
+"""Tree implementations for MLX Boosting.
 
-__all__: list[str] = []
+GPU-accelerated decision tree implementations optimized for Apple Silicon.
+"""
+
+from mlx_boosting.trees.decision_tree import (
+    DecisionTreeClassifier,
+    DecisionTreeRegressor,
+)
+
+__all__ = ["DecisionTreeRegressor", "DecisionTreeClassifier"]
