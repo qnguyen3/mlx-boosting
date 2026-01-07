@@ -269,6 +269,56 @@ def _split_samples(
     return new_indices
 
 
+@njit(parallel=True, cache=True)
+def _compute_histograms_parallel(
+    binned_X: np.ndarray,
+    g_np: np.ndarray,
+    h_np: np.ndarray,
+    compact_indices: np.ndarray,
+    n_active: int,
+    n_bins: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute histograms in parallel over features."""
+    n_samples, n_features = binned_X.shape
+
+    grad_hist = np.zeros((n_active, n_features, n_bins), dtype=np.float32)
+    hess_hist = np.zeros((n_active, n_features, n_bins), dtype=np.float32)
+
+    # Parallel over features - each feature's histogram is independent
+    for f in prange(n_features):
+        for i in range(n_samples):
+            cidx = compact_indices[i]
+            if cidx >= 0:
+                bin_idx = binned_X[i, f]
+                grad_hist[cidx, f, bin_idx] += g_np[i]
+                hess_hist[cidx, f, bin_idx] += h_np[i]
+
+    return grad_hist, hess_hist
+
+
+@njit(parallel=True, cache=True)
+def _compute_hist_direct(
+    binned_X: np.ndarray,
+    g_np: np.ndarray,
+    h_np: np.ndarray,
+    compact_indices: np.ndarray,
+    needs_compute: np.ndarray,
+    grad_hist: np.ndarray,
+    hess_hist: np.ndarray,
+) -> None:
+    """Compute histograms in parallel for nodes that need direct computation."""
+    n_samples, n_features = binned_X.shape
+
+    # Parallel over features
+    for f in prange(n_features):
+        for i in range(n_samples):
+            cidx = compact_indices[i]
+            if cidx >= 0 and needs_compute[cidx]:
+                bin_idx = binned_X[i, f]
+                grad_hist[cidx, f, bin_idx] += g_np[i]
+                hess_hist[cidx, f, bin_idx] += h_np[i]
+
+
 @njit(cache=True)
 def _build_tree_core(
     X_np: np.ndarray,
@@ -284,7 +334,7 @@ def _build_tree_core(
     gamma: float,
     n_bins: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
-    """Core tree building logic - fully JIT compiled."""
+    """Core tree building logic with histogram subtraction optimization."""
     n_samples, n_features = X_np.shape
     max_nodes = 2 ** (max_depth + 1) - 1
 
@@ -295,6 +345,14 @@ def _build_tree_core(
     right_children = np.full(max_nodes, -1, dtype=np.int32)
     values = np.zeros(max_nodes, dtype=np.float32)
     is_leaf = np.ones(max_nodes, dtype=np.bool_)
+
+    # Parent tracking for histogram subtraction
+    node_parent = np.full(max_nodes, -1, dtype=np.int32)
+    node_is_left = np.zeros(max_nodes, dtype=np.bool_)
+
+    # Saved histograms for subtraction (only need to save parent histograms)
+    saved_grad_hist = np.zeros((max_nodes, n_features, n_bins), dtype=np.float32)
+    saved_hess_hist = np.zeros((max_nodes, n_features, n_bins), dtype=np.float32)
 
     # Node assignments
     node_indices = np.zeros(n_samples, dtype=np.int32)
@@ -335,19 +393,38 @@ def _build_tree_core(
             else:
                 compact_indices[i] = -1
 
-        # Compute histograms
+        # Compute histograms with subtraction trick
         grad_hist = np.zeros((n_active, n_features, n_bins), dtype=np.float32)
         hess_hist = np.zeros((n_active, n_features, n_bins), dtype=np.float32)
 
-        for i in range(n_samples):
-            cidx = compact_indices[i]
-            if cidx >= 0:
-                g = g_np[i]
-                h = h_np[i]
+        # Track which nodes need direct computation vs subtraction
+        needs_compute = np.ones(n_active, dtype=np.bool_)
+
+        for idx in range(n_active):
+            node = active_nodes[idx]
+            parent = node_parent[node]
+
+            # Use subtraction for right children (parent histogram - left sibling)
+            if parent >= 0 and not node_is_left[node]:
+                left_sibling = left_children[parent]
+                # Subtract: right = parent - left
                 for f in range(n_features):
-                    bin_idx = binned_X[i, f]
-                    grad_hist[cidx, f, bin_idx] += g
-                    hess_hist[cidx, f, bin_idx] += h
+                    for b in range(n_bins):
+                        grad_hist[idx, f, b] = (
+                            saved_grad_hist[parent, f, b]
+                            - saved_grad_hist[left_sibling, f, b]
+                        )
+                        hess_hist[idx, f, b] = (
+                            saved_hess_hist[parent, f, b]
+                            - saved_hess_hist[left_sibling, f, b]
+                        )
+                needs_compute[idx] = False
+
+        # Direct computation for nodes that need it (root and left children)
+        # Call parallel histogram function
+        _compute_hist_direct(
+            binned_X, g_np, h_np, compact_indices, needs_compute, grad_hist, hess_hist
+        )
 
         # Find best splits and process them
         any_split = False
@@ -417,6 +494,12 @@ def _build_tree_core(
                 is_leaf[orig_node] = True
                 continue
 
+            # Save histogram for this node (will be parent of children)
+            for f in range(n_features):
+                for b in range(n_bins):
+                    saved_grad_hist[orig_node, f, b] = grad_hist[idx, f, b]
+                    saved_hess_hist[orig_node, f, b] = hess_hist[idx, f, b]
+
             # Create split
             left_idx = next_node_id
             right_idx = next_node_id + 1
@@ -428,6 +511,12 @@ def _build_tree_core(
             left_children[orig_node] = left_idx
             right_children[orig_node] = right_idx
             is_leaf[orig_node] = False
+
+            # Track parent-child relationships
+            node_parent[left_idx] = orig_node
+            node_parent[right_idx] = orig_node
+            node_is_left[left_idx] = True
+            node_is_left[right_idx] = False
 
             # Update sample assignments
             for i in range(n_samples):
